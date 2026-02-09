@@ -31,6 +31,20 @@ final class Conceptos
         );
     }
 
+public function totalImpuestosTrasladados(): float
+{
+    $total = 0.0;
+
+    foreach ($this->items as $concepto) {
+        foreach ($concepto->getImpuestos()?->getTraslados() ?? [] as $t) {
+            $total += $t->getImporte();
+        }
+    }
+
+    return round($total, 2);
+}
+
+
     public function validar(): void
     {
         if (count($this->items) === 0) {

@@ -17,7 +17,8 @@ final class XmlBuilder implements XmlBuilderInterface
     private const CFDI_NS = 'http://www.sat.gob.mx/cfd/4';
     private const XSI_NS  = 'http://www.w3.org/2001/XMLSchema-instance';
 
-    public function build(Cfdi $cfdi): string
+    // public function build(Cfdi $cfdi): string
+	public function build(Cfdi $cfdi, Certificado $cert): string	
     {
         $cfdi->validar();
 
@@ -35,7 +36,26 @@ final class XmlBuilder implements XmlBuilderInterface
             'http://www.sat.gob.mx/cfd/4 http://www.sat.gob.mx/sitio_internet/cfd/4/cfdv40.xsd'
         );
 
+// 🔥 ATRIBUTOS QUE ENTRAN EN LA CADENA ORIGINAL
+$comprobante->setAttribute(
+    'Fecha',
+    (new \DateTime('now', new \DateTimeZone('America/Mexico_City')))
+        ->format('Y-m-d\TH:i:s')
+);
+
+$comprobante->setAttribute(
+    'NoCertificado',
+    $cert->getNoCertificado()
+);
+
+$comprobante->setAttribute(
+    'Certificado',
+    $cert->getCertificado()
+);
+
         $this->setAttributes($comprobante, $cfdi->comprobante()->toArray());
+
+		
 
         // Emisor
         $emisor = $dom->createElement('cfdi:Emisor');
@@ -89,9 +109,34 @@ if ($impuestos) {
 		}		
 
 
+// $totalTraslados = $cfdi->totalImpuestosTrasladados();
+
+// if ($totalTraslados > 0) {
+//     $impGlobal = $dom->createElement('cfdi:Impuestos');
+//     $impGlobal->setAttribute(
+//         'TotalImpuestosTrasladados',
+//         number_format($totalTraslados, 2, '.', '')
+//     );
+
+//     $trasladosNode = $dom->createElement('cfdi:Traslados');
+
+//     foreach ($cfdi->conceptos()->all() as $concepto) {
+//         foreach ($concepto->getImpuestos()?->getTraslados() ?? [] as $t) {
+//             $tNode = $dom->createElement('cfdi:Traslado');
+//             $this->setAttributes($tNode, $t->toArray());
+//             $trasladosNode->appendChild($tNode);
+//         }
+//     }
+
+//     $impGlobal->appendChild($trasladosNode);
+//     $comprobante->appendChild($impGlobal);
+// }
+
+
 $totalTraslados = $cfdi->totalImpuestosTrasladados();
 
 if ($totalTraslados > 0) {
+
     $impGlobal = $dom->createElement('cfdi:Impuestos');
     $impGlobal->setAttribute(
         'TotalImpuestosTrasladados',
@@ -100,12 +145,42 @@ if ($totalTraslados > 0) {
 
     $trasladosNode = $dom->createElement('cfdi:Traslados');
 
+    $acumulados = [];
+
     foreach ($cfdi->conceptos()->all() as $concepto) {
         foreach ($concepto->getImpuestos()?->getTraslados() ?? [] as $t) {
-            $tNode = $dom->createElement('cfdi:Traslado');
-            $this->setAttributes($tNode, $t->toArray());
-            $trasladosNode->appendChild($tNode);
+
+            $key = implode('|', [
+                $t->getImpuesto(),
+                $t->getTipoFactor(),
+                number_format($t->getTasaOCuota(), 6, '.', '')
+            ]);
+
+            if (!isset($acumulados[$key])) {
+                $acumulados[$key] = [
+                    'Base'       => 0,
+                    'Importe'    => 0,
+                    'Impuesto'   => $t->getImpuesto(),
+                    'TipoFactor' => $t->getTipoFactor(),
+                    'TasaOCuota' => number_format($t->getTasaOCuota(), 6, '.', '')
+                ];
+            }
+
+            $acumulados[$key]['Base']    += $t->getBase();
+            $acumulados[$key]['Importe'] += $t->getImporte();
         }
+    }
+
+    foreach ($acumulados as $data) {
+        $tNode = $dom->createElement('cfdi:Traslado');
+        $this->setAttributes($tNode, [
+            'Base'       => number_format($data['Base'], 2, '.', ''),
+            'Impuesto'   => $data['Impuesto'],
+            'TipoFactor' => $data['TipoFactor'],
+            'TasaOCuota' => $data['TasaOCuota'],
+            'Importe'    => number_format($data['Importe'], 2, '.', '')
+        ]);
+        $trasladosNode->appendChild($tNode);
     }
 
     $impGlobal->appendChild($trasladosNode);
@@ -129,21 +204,20 @@ if ($totalTraslados > 0) {
 
 public function sellar(
     string $xml,
-    Certificado $cert,
     LlavePrivada $key,
     string $xsltPath
 ): string {
+    // 1️⃣ Generar cadena original DEL XML FINAL
     $cadena = CadenaOriginal::generar($xml, $xsltPath);
-    $sello  = SelloDigital::generar($cadena, $key);
 
+    // 2️⃣ Generar sello
+    $sello = SelloDigital::generar($cadena, $key);
+
+    // 3️⃣ Insertar SOLO el sello
     $dom = new \DOMDocument();
     $dom->loadXML($xml);
 
-    $comprobante = $dom->documentElement;
-
-    $comprobante->setAttribute('Sello', $sello);
-    $comprobante->setAttribute('NoCertificado', $cert->getNoCertificado());
-    $comprobante->setAttribute('Certificado', $cert->getCertificado());
+    $dom->documentElement->setAttribute('Sello', $sello);
 
     return $dom->saveXML();
 }
@@ -152,6 +226,30 @@ public function sellar(
 
 
 
+// public function sellar(
+//     string $xml,
+//     Certificado $cert,
+//     LlavePrivada $key,
+//     string $xsltPath
+// ): string {
+//     $cadena = CadenaOriginal::generar($xml, $xsltPath);
+//     $sello  = SelloDigital::generar($cadena, $key);
+
+//     $dom = new \DOMDocument();
+//     $dom->loadXML($xml);
+
+//     $comprobante = $dom->documentElement;
+
+//     $comprobante->setAttribute('Sello', $sello);
+//     $comprobante->setAttribute('NoCertificado', $cert->getNoCertificado());
+//     $comprobante->setAttribute('Certificado', $cert->getCertificado());
+	
+// 	$fecha = (new \DateTime('now', new \DateTimeZone('America/Mexico_City')))
+//     ->format('Y-m-d\TH:i:s');
+//     $comprobante->setAttribute('Fecha', $fecha);
+
+//     return $dom->saveXML();
+// }
 
 
 

@@ -5,7 +5,7 @@ namespace AzkorSoft\Cfdi\Utils;
 
 final class Logger
 {
-    private static string $logPath = __DIR__ . '/../../../logs/cfdi.log';
+    private static string $logPath = __DIR__ . '/../../Logs/CFDi/cfdi.log';
 
     public static function info(string $message, array $context = []): void
     {

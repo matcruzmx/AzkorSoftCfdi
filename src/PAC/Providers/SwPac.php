@@ -7,36 +7,36 @@ use AzkorSoft\Cfdi\PAC\PacInterface;
 use AzkorSoft\Cfdi\PAC\TimbradoResult;
 use AzkorSoft\Cfdi\Exceptions\CfdiException;
 use AzkorSoft\Cfdi\Utils\Logger;
+use Matcruz\AzkorSoft\Helpers\RegisterLogs;
+
 
 final class SwPac implements PacInterface
 {
-    private string $url;
-    private ?string $token = null;
-
-    private ?string $user = null;
-    private ?string $password = null;
+	private string $url;
+    private ?string $token;
+    private ?string $user;
+    private ?string $password;
 
     public function __construct(
+        string $url,
         ?string $token = null,
         ?string $user = null,
         ?string $password = null,
         bool $produccion = false
     ) {
-        $this->url = $produccion
-            ? 'https://services.sw.com.mx'
-            : 'https://services.test.sw.com.mx';
+        $this->url = $url;
+        $this->token = $token;
+        $this->user = $user;
+        $this->password = $password;
 
-        if ($token) {
-            $this->token = $token;
-        } elseif ($user && $password) {
-            $this->user = $user;
-            $this->password = $password;
-        } else {
+        if (!$token && (!$user || !$password)) {
             throw new CfdiException(
                 'Debe proporcionar token o usuario y contraseña para SW'
             );
         }
     }
+
+
 
     /**
      * Obtiene token si no existe
@@ -47,9 +47,9 @@ final class SwPac implements PacInterface
             return;
         }
 
-        Logger::info('Autenticando con SW (usuario/contraseña)');
+        RegisterLogs::logCFDi('Autenticando con SW (usuario/contraseña)');
 
-        $endpoint = $this->url . '/security/authenticate';
+        $endpoint = $this->url . '/v2/security/authenticate';
 
         $payload = json_encode([
             'user'     => $this->user,
@@ -71,7 +71,7 @@ final class SwPac implements PacInterface
         curl_close($ch);
 
         if ($curlError) {
-            Logger::error('Error CURL autenticando SW', [
+            RegisterLogs::logCFDi('Error CURL autenticando SW', [
                 'error' => $curlError
             ]);
             throw new CfdiException(
@@ -82,7 +82,7 @@ final class SwPac implements PacInterface
         $data = json_decode($response, true);
 
         if (!isset($data['status']) || $data['status'] !== 'success') {
-            Logger::error('Error autenticando con SW', [
+            RegisterLogs::logCFDi('Error autenticando con SW', [
                 'response' => $data
             ]);
             throw new CfdiException(
@@ -92,222 +92,83 @@ final class SwPac implements PacInterface
 
         $this->token = $data['data']['token'];
 
-        Logger::info('Token SW obtenido correctamente');
+        RegisterLogs::logCFDi('Token SW obtenido correctamente');
     }
 
-    public function timbrar(string $xml): TimbradoResult
-    {
-        $this->authenticate();
+	public function timbrar(string $xml): TimbradoResult
+	{
+		$this->authenticate();
 
-        Logger::info('Iniciando timbrado CFDI con SW');
+		RegisterLogs::logCFDi('Iniciando timbrado CFDI con SW');
 
-        $endpoint = $this->url . '/cfdi33/timbrar/v4';
+		$endpoint = $this->url . '/cfdi33/stamp/v4';
 
-        $payload = json_encode([
-            'xml' => base64_encode($xml)
-        ]);
+		// Crear archivo temporal
+		$tmp = tempnam(sys_get_temp_dir(), 'cfdi_');
+		file_put_contents($tmp, $xml);
 
-        $ch = curl_init($endpoint);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => $payload,
-            CURLOPT_HTTPHEADER => [
-                'Authorization: Bearer ' . $this->token,
-                'Content-Type: application/json'
-            ]
-        ]);
 
-        $response = curl_exec($ch);
-        $curlError = curl_error($ch);
-        curl_close($ch);
+		RegisterLogs::logCFDi($tmp);
 
-        if ($curlError) {
-            Logger::error('Error CURL en timbrado', [
-                'error' => $curlError
-            ]);
-            throw new CfdiException(
-                'Error de conexión con SW: ' . $curlError
-            );
-        }
+		$postFields = [
+			'xml' => new \CURLFile(
+				$tmp,
+				'application/xml',
+				'cfdi.xml'
+			)
+		];
 
-        $data = json_decode($response, true);
+		$ch = curl_init($endpoint);
+		curl_setopt_array($ch, [
+			CURLOPT_RETURNTRANSFER => true,
+			CURLOPT_POST => true,
+			CURLOPT_POSTFIELDS => $postFields,
+			CURLOPT_HTTPHEADER => [
+				'Authorization: Bearer ' . $this->token
+				// ⚠️ NO pongas Content-Type
+			]
+		]);
 
-        if (!isset($data['status']) || $data['status'] !== 'success') {
-            Logger::error('Error al timbrar CFDI', [
-                'response' => $data
-            ]);
-            throw new CfdiException(
-                $data['message'] ?? 'Error al timbrar CFDI'
-            );
-        }
+		$response = curl_exec($ch);
+		$curlError = curl_error($ch);
+		curl_close($ch);
 
-        Logger::info('CFDI timbrado correctamente', [
-            'uuid' => $data['data']['uuid']
-        ]);
+		unlink($tmp);
 
-        return new TimbradoResult(
-            uuid: $data['data']['uuid'],
-            xmlTimbrado: base64_decode($data['data']['cfdi']),
-            fechaTimbrado: $data['data']['fechaTimbrado'],
-            selloSat: $data['data']['selloSAT'],
-            noCertificadoSat: $data['data']['noCertificadoSAT']
-        );
-    }
+		if ($curlError) {
+			RegisterLogs::logCFDi('Error CURL en timbrado', ['error' => $curlError]);
+			throw new CfdiException('Error de conexión con SW: ' . $curlError);
+		}
+
+		$data = json_decode($response, true);
+
+		if (!isset($data['status']) || $data['status'] !== 'success') {
+			RegisterLogs::logCFDi('Error al timbrar CFDI', ['response' => $data]);
+			throw new CfdiException(
+				$data['message'] ?? 'Error al timbrar CFDI'
+			);
+		}
+
+		RegisterLogs::logCFDi('CFDI timbrado correctamente', [
+			'uuid' => $data['data']['uuid']
+		]);
+		RegisterLogs::logCFDi('CFDI timbrado correctamente', [
+			'timbradoResult' => $data
+		]);
+		RegisterLogs::logCFDi('XML', [
+			'data cfdi' => $data['data']['cfdi']
+		]);
+
+		return new TimbradoResult(
+			uuid: $data['data']['uuid'],
+			xmlTimbrado: $data['data']['cfdi'], 
+			fechaTimbrado: $data['data']['fechaTimbrado'],
+			selloSat: $data['data']['selloSAT'],
+			noCertificadoSat: $data['data']['noCertificadoSAT']
+		);
+	}
+
+   
 }
 
 
-
-
-/*
-declare(strict_types=1);
-
-namespace AzkorSoft\Cfdi\PAC\Providers;
-
-use AzkorSoft\Cfdi\PAC\PacInterface;
-use AzkorSoft\Cfdi\PAC\TimbradoResult;
-use AzkorSoft\Cfdi\Exceptions\CfdiException;
-use AzkorSoft\Cfdi\Utils\Logger;
-
-final class SwPac implements PacInterface
-{
-    private string $url;
-    private string $token;
-
-    public function __construct(string $token, bool $produccion = false)
-    {
-        $this->token = $token;
-        $this->url = $produccion
-            ? 'https://services.sw.com.mx'
-            : 'https://services.test.sw.com.mx';
-    }
-
-    public function timbrar(string $xml): TimbradoResult
-    {
-        Logger::info('Iniciando timbrado CFDI con SW');
-
-        $endpoint = $this->url . '/cfdi33/timbrar/v4';
-
-        $payload = json_encode([
-            'xml' => base64_encode($xml)
-        ]);
-
-        $ch = curl_init($endpoint);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => $payload,
-            CURLOPT_HTTPHEADER => [
-                'Authorization: Bearer ' . $this->token,
-                'Content-Type: application/json'
-            ]
-        ]);
-
-        $response = curl_exec($ch);
-        $curlError = curl_error($ch);
-        curl_close($ch);
-
-        if ($curlError) {
-            Logger::error('Error CURL en timbrado', ['error' => $curlError]);
-            throw new CfdiException('Error de conexión con SW: ' . $curlError);
-        }
-
-        $data = json_decode($response, true);
-
-        if (!isset($data['status']) || $data['status'] !== 'success') {
-            Logger::error('Error al timbrar CFDI', [
-                'response' => $data
-            ]);
-
-            throw new CfdiException(
-                $data['message'] ?? 'Error desconocido al timbrar CFDI'
-            );
-        }
-
-        Logger::info('CFDI timbrado correctamente', [
-            'uuid' => $data['data']['uuid']
-        ]);
-
-        return new TimbradoResult(
-            uuid: $data['data']['uuid'],
-            xmlTimbrado: base64_decode($data['data']['cfdi']),
-            fechaTimbrado: $data['data']['fechaTimbrado'],
-            selloSat: $data['data']['selloSAT'],
-            noCertificadoSat: $data['data']['noCertificadoSAT']
-        );
-    }
-}
-*/
-
-
-/**********
-// declare(strict_types=1);
-
-namespace AzkorSoft\Cfdi\PAC\Providers;
-
-use AzkorSoft\Cfdi\PAC\PacInterface;
-use AzkorSoft\Cfdi\PAC\TimbradoResult;
-use RuntimeException;
-
-final class SwPac implements PacInterface
-{
-    private string $url;
-    private string $token;
-
-    public function __construct(string $token, bool $produccion = false)
-    {
-        $this->token = $token;
-        $this->url = $produccion
-            ? 'https://services.sw.com.mx'
-            : 'https://services.test.sw.com.mx';
-    }
-
-    public function timbrar(string $xml): TimbradoResult
-    {
-        $endpoint = $this->url . '/cfdi33/timbrar/v4';
-
-        $payload = json_encode([
-            'xml' => base64_encode($xml)
-        ], JSON_THROW_ON_ERROR);
-
-        $ch = curl_init($endpoint);
-        curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_POST => true,
-            CURLOPT_POSTFIELDS => $payload,
-            CURLOPT_HTTPHEADER => [
-                'Authorization: Bearer ' . $this->token,
-                'Content-Type: application/json'
-            ]
-        ]);
-
-        $response = curl_exec($ch);
-
-        if ($response === false) {
-            throw new RuntimeException(
-                'Error CURL SW: ' . curl_error($ch)
-            );
-        }
-
-        curl_close($ch);
-
-        $data = json_decode($response, true);
-
-        if (!isset($data['status']) || $data['status'] !== 'success') {
-            throw new RuntimeException(
-                $data['message'] ?? 'Error desconocido al timbrar CFDI'
-            );
-        }
-
-        $timbrado = $data['data'];
-
-        return new TimbradoResult(
-            $timbrado['uuid'],
-            base64_decode($timbrado['cfdi']),
-            $timbrado['fechaTimbrado'],
-            $timbrado['selloSAT'],
-            $timbrado['noCertificadoSAT']
-        );
-    }
-}
-**/
