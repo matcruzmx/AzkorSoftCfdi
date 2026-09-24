@@ -142,12 +142,22 @@ final class SwPac implements PacInterface
 
 		$data = json_decode($response, true);
 
+		// if (!isset($data['status']) || $data['status'] !== 'success') {
+		// 	RegisterLogs::logCFDi('Error al timbrar CFDI', ['response' => $data]);
+		// 	throw new CfdiException(
+		// 		$data['messageDetail'] ?? 'Error al timbrar CFDI'
+		// 	);
+		// }
+
 		if (!isset($data['status']) || $data['status'] !== 'success') {
 			RegisterLogs::logCFDi('Error al timbrar CFDI', ['response' => $data]);
+			$msg = $data['message'] ?? '';
+			$detail = $data['messageDetail'] ?? '';
 			throw new CfdiException(
-				$data['message'] ?? 'Error al timbrar CFDI'
+				trim($msg . ($detail ? " — $detail" : '')) ?: 'Error al timbrar CFDI'
 			);
 		}
+
 
 		RegisterLogs::logCFDi('CFDI timbrado correctamente', [
 			'uuid' => $data['data']['uuid']

@@ -14,6 +14,8 @@ final class Certificado
 
     public function __construct(string $cerPath)
     {
+
+    //  var_dump($cerPath);
         if (!file_exists($cerPath)) {
             throw new CfdiException('Archivo .cer no encontrado');
         }
